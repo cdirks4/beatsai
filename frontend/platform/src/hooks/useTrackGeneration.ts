@@ -13,6 +13,7 @@ export function useTrackGeneration() {
       const track = await generateTrack(instrument, prompt);
       return track;
     } catch (err) {
+      console.error("Generation error:", err);
       setError(err instanceof Error ? err.message : "Failed to generate track");
       return null;
     } finally {

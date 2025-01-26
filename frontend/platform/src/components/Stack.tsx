@@ -77,33 +77,73 @@ export default function Stack() {
   }, []);
 
   useEffect(() => {
+    // Create new audio elements for new tracks
     tracks.forEach((track) => {
       if (!audioRefs.current[track.id]) {
         const audio = new Audio(track.audioUrl);
         audio.volume = volumes[track.id] || 0.8;
 
-        audio.addEventListener("loadedmetadata", () => {
+        const handleLoadedMetadata = () => {
           setDuration((prev) => ({ ...prev, [track.id]: audio.duration }));
-        });
+        };
 
-        audio.addEventListener("ended", () => handleAudioEnded(track.id));
+        const handleEnded = () => handleAudioEnded(track.id);
 
         const handleTimeUpdate = () => {
           setProgress((prev) => ({ ...prev, [track.id]: audio.currentTime }));
         };
 
+        audio.addEventListener("loadedmetadata", handleLoadedMetadata);
+        audio.addEventListener("ended", handleEnded);
         audio.addEventListener("timeupdate", handleTimeUpdate);
         audioRefs.current[track.id] = audio;
 
-        const cleanup = () => {
-          audio.removeEventListener("timeupdate", handleTimeUpdate);
-          audio.removeEventListener("ended", () => handleAudioEnded(track.id));
-          audio.removeEventListener("loadedmetadata", () => {});
-        };
-
-        return cleanup;
+        // Setup audio node immediately
+        setupAudioNode(track.id);
       }
     });
+
+    // Cleanup function
+    return () => {
+      Object.entries(audioRefs.current).forEach(([id, audio]) => {
+        if (!tracks.find((t) => t.id === id)) {
+          audio.pause();
+          audio.removeEventListener("loadedmetadata", () => {});
+          audio.removeEventListener("ended", () => handleAudioEnded(id));
+          audio.removeEventListener("timeupdate", () => {});
+
+          // Clean up audio nodes
+          if (sourceRefs.current[id]) {
+            try {
+              sourceRefs.current[id].disconnect();
+            } catch (e) {
+              // Ignore disconnect errors
+            }
+            delete sourceRefs.current[id];
+          }
+          if (analyserRefs.current[id]) {
+            try {
+              analyserRefs.current[id].disconnect();
+            } catch (e) {
+              // Ignore disconnect errors
+            }
+            delete analyserRefs.current[id];
+          }
+          delete audioRefs.current[id];
+        }
+      });
+    };
+  }, [tracks]);
+
+  useEffect(() => {
+    return () => {
+      // Cleanup blob URLs when component unmounts
+      tracks.forEach((track) => {
+        if (track.audioUrl.startsWith("blob:")) {
+          URL.revokeObjectURL(track.audioUrl);
+        }
+      });
+    };
   }, [tracks]);
 
   const setupAudioNode = async (trackId: string) => {
@@ -111,23 +151,38 @@ export default function Stack() {
     if (!audio || !audioContextRef.current) return;
 
     try {
-      // Resume audio context if it's suspended
       if (audioContextRef.current.state === "suspended") {
         await audioContextRef.current.resume();
       }
 
-      // Only create new nodes if they don't exist
+      // If we don't have a source node for this track yet, create one
       if (!sourceRefs.current[trackId]) {
         const source = audioContextRef.current.createMediaElementSource(audio);
-        const analyser = audioContextRef.current.createAnalyser();
-        analyser.fftSize = 128;
-
-        source.connect(analyser);
-        analyser.connect(audioContextRef.current.destination);
-
         sourceRefs.current[trackId] = source;
-        analyserRefs.current[trackId] = analyser;
       }
+
+      // Get the existing source node
+      const source = sourceRefs.current[trackId];
+
+      // Create new analyser and gain nodes (these can be recreated)
+      const analyser = audioContextRef.current.createAnalyser();
+      const gainNode = audioContextRef.current.createGain();
+      analyser.fftSize = 128;
+
+      // Disconnect existing connections if any
+      try {
+        source.disconnect();
+      } catch (e) {
+        // Ignore disconnect errors
+      }
+
+      // Connect nodes
+      source.connect(analyser);
+      analyser.connect(gainNode);
+      gainNode.connect(audioContextRef.current.destination);
+
+      analyserRefs.current[trackId] = analyser;
+      gainNode.gain.value = volumes[trackId] || 0.8;
     } catch (error) {
       console.error("Error setting up audio node:", error);
     }
@@ -155,20 +210,21 @@ export default function Stack() {
     }
 
     try {
+      await setupAudioNode(trackId);
+
       if (playing === trackId) {
         audio.pause();
         setPlaying(null);
         cancelAnimationFrame(animationFrames.current[trackId]);
       } else {
+        // If another track is playing, pause it first
         if (playing && audioRefs.current[playing]) {
           audioRefs.current[playing].pause();
           cancelAnimationFrame(animationFrames.current[playing]);
         }
 
-        await setupAudioNode(trackId);
         await audio.play();
         setPlaying(trackId);
-        // Start progress tracking immediately
         requestAnimationFrame(() => updateProgress(trackId));
       }
     } catch (error) {
@@ -255,6 +311,11 @@ export default function Stack() {
   };
 
   const removeTrack = (trackId: string) => {
+    const track = tracks.find((t) => t.id === trackId);
+    if (track?.audioUrl.startsWith("blob:")) {
+      URL.revokeObjectURL(track.audioUrl);
+    }
+
     // Stop and cleanup audio if playing
     if (playing === trackId) {
       const audio = audioRefs.current[trackId];
@@ -268,11 +329,19 @@ export default function Stack() {
 
     // Cleanup audio resources
     if (sourceRefs.current[trackId]) {
-      sourceRefs.current[trackId].disconnect();
+      try {
+        sourceRefs.current[trackId].disconnect();
+      } catch (e) {
+        // Ignore disconnect errors
+      }
       delete sourceRefs.current[trackId];
     }
     if (analyserRefs.current[trackId]) {
-      analyserRefs.current[trackId].disconnect();
+      try {
+        analyserRefs.current[trackId].disconnect();
+      } catch (e) {
+        // Ignore disconnect errors
+      }
       delete analyserRefs.current[trackId];
     }
     if (audioRefs.current[trackId]) {
