@@ -3,6 +3,8 @@
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import PromptModal from "./PromptModal";
+import { GenerateTrackResponse } from "@/lib/api/tracks";
+import { useStack } from "@/contexts/StackContext";
 
 const instruments = [
   {
@@ -37,6 +39,7 @@ const instruments = [
 ];
 
 export default function InstrumentSidebar() {
+  const { addTrack } = useStack();
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [selectedInstrument, setSelectedInstrument] = useState<
     (typeof instruments)[0] | null
@@ -45,6 +48,12 @@ export default function InstrumentSidebar() {
   const handleInstrumentClick = (instrument: (typeof instruments)[0]) => {
     setSelectedInstrument(instrument);
     setIsModalOpen(true);
+  };
+
+  const handleTrackGenerated = (track: GenerateTrackResponse) => {
+    addTrack(track);
+    setIsModalOpen(false);
+    setSelectedInstrument(null);
   };
 
   return (
@@ -75,6 +84,7 @@ export default function InstrumentSidebar() {
           setSelectedInstrument(null);
         }}
         instrument={selectedInstrument}
+        onTrackGenerated={handleTrackGenerated}
       />
     </>
   );

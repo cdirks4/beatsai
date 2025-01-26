@@ -1,95 +1,80 @@
 "use client";
 
 import { useState } from "react";
-import { Button } from "@/components/ui/button";
 import {
   Dialog,
   DialogContent,
   DialogHeader,
   DialogTitle,
-  DialogFooter,
-  DialogDescription,
 } from "@/components/ui/dialog";
-import { Textarea } from "@/components/ui/textarea";
+import { Button } from "@/components/ui/button";
+import { useTrackGeneration } from "@/hooks/useTrackGeneration";
+import { Loader2 } from "lucide-react";
 
 interface PromptModalProps {
   isOpen: boolean;
   onClose: () => void;
-  instrument: {
-    id: string;
-    name: string;
-    icon: string;
-    description: string;
-    placeholder: string;
-  } | null;
-  onGenerate?: (track: {
-    id: string;
-    instrument: string;
-    prompt: string;
-    audioUrl: string;
-  }) => void;
+  instrument: any;
+  onTrackGenerated?: (track: any) => void;
 }
 
 export default function PromptModal({
   isOpen,
   onClose,
   instrument,
-  onGenerate,
+  onTrackGenerated,
 }: PromptModalProps) {
   const [prompt, setPrompt] = useState("");
-  const [isLoading, setIsLoading] = useState(false);
+  const { generate, isGenerating, error } = useTrackGeneration();
 
-  const handleGenerate = async () => {
-    try {
-      setIsLoading(true);
-      // TODO: Replace with actual API call
-      // For now, use demo audio files
-      const demoAudio = `/demos/${instrument?.id}.mp3`;
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!instrument || !prompt.trim()) return;
 
-      if (onGenerate) {
-        onGenerate({
-          id: `${instrument?.id}-${Date.now()}`,
-          instrument: instrument?.name || "",
-          prompt,
-          audioUrl: demoAudio,
-        });
-      }
-
+    const track = await generate(instrument.name, prompt);
+    if (track && onTrackGenerated) {
+      onTrackGenerated(track);
       onClose();
       setPrompt("");
-    } catch (error) {
-      console.error("Generation failed:", error);
-    } finally {
-      setIsLoading(false);
     }
   };
 
   return (
     <Dialog open={isOpen} onOpenChange={onClose}>
-      <DialogContent className="sm:max-w-[425px]">
+      <DialogContent>
         <DialogHeader>
-          <div className="flex items-center gap-2">
-            <span className="text-2xl">{instrument?.icon}</span>
-            <DialogTitle>{instrument?.name}</DialogTitle>
-          </div>
-          <DialogDescription>{instrument?.description}</DialogDescription>
+          <DialogTitle>Generate {instrument?.name}</DialogTitle>
         </DialogHeader>
-        <div className="grid gap-4 py-4">
-          <Textarea
+        <form onSubmit={handleSubmit}>
+          <textarea
+            className="w-full p-2 rounded-md border mb-4 dark:bg-gray-700 dark:border-gray-600"
+            placeholder={instrument?.placeholder}
             value={prompt}
             onChange={(e) => setPrompt(e.target.value)}
-            placeholder={instrument?.placeholder}
-            className="min-h-[100px]"
+            rows={4}
           />
-        </div>
-        <DialogFooter>
-          <Button variant="outline" onClick={onClose}>
-            Cancel
-          </Button>
-          <Button onClick={handleGenerate} disabled={isLoading}>
-            {isLoading ? "Generating..." : "Generate"}
-          </Button>
-        </DialogFooter>
+          {error && <p className="text-red-500 text-sm mb-4">{error}</p>}
+          <div className="flex justify-end gap-2">
+            <Button
+              type="button"
+              variant="ghost"
+              onClick={onClose}
+              disabled={isGenerating}
+            >
+              Cancel
+            </Button>
+            <Button type="submit" disabled={isGenerating || !prompt.trim()}>
+              {isGenerating ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Generating...
+                </>
+              ) : (
+                "Generate"
+              )}
+            </Button>
+          </div>
+        </form>
       </DialogContent>
     </Dialog>
   );

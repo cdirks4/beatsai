@@ -3,6 +3,7 @@ import InstrumentSidebar from "@/components/InstrumentSidebar";
 import Stack from "@/components/Stack";
 import { redirect } from "next/navigation";
 import { auth } from "@clerk/nextjs/server";
+import { StackProvider } from "@/contexts/StackContext";
 
 export default async function Home() {
   const { userId } = await auth();
@@ -21,12 +22,14 @@ export default async function Home() {
           </div>
         </div>
       </header>
-      <div className="flex flex-1">
-        <InstrumentSidebar />
-        <main className="flex-1 p-8 overflow-auto">
-          <Stack />
-        </main>
-      </div>
+      <StackProvider>
+        <div className="flex flex-1">
+          <InstrumentSidebar />
+          <main className="flex-1 p-8 overflow-auto">
+            <Stack />
+          </main>
+        </div>
+      </StackProvider>
     </div>
   );
 }

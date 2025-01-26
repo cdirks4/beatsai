@@ -3,9 +3,11 @@
 import { useState, useRef, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { useUser } from "@clerk/nextjs";
-import { Play, Pause, RotateCw } from "lucide-react";
+import { Play, Pause, RotateCw, Trash2 } from "lucide-react";
 import { VolumeControl } from "@/components/ui/volume-control";
 import { ProgressBar } from "@/components/ui/progress-bar";
+import InstrumentSidebar from "@/components/InstrumentSidebar";
+import { useStack } from "@/contexts/StackContext";
 
 interface Track {
   id: string;
@@ -45,7 +47,7 @@ const demoTracks: Track[] = [
 
 export default function Stack() {
   const { user } = useUser();
-  const [tracks, setTracks] = useState<Track[]>(demoTracks);
+  const { tracks } = useStack();
   const [playing, setPlaying] = useState<string | null>(null);
   const [progress, setProgress] = useState<{ [key: string]: number }>({});
   const [duration, setDuration] = useState<{ [key: string]: number }>({});
@@ -220,10 +222,6 @@ export default function Stack() {
     }
   };
 
-  const addTrack = (track: Track) => {
-    setTracks((prev) => [...prev, track]);
-  };
-
   const handleVolumeChange = (trackId: string, value: number) => {
     const audio = audioRefs.current[trackId];
     if (!audio) return;
@@ -256,81 +254,128 @@ export default function Stack() {
     });
   };
 
-  return (
-    <div className="space-y-4">
-      <div className="flex justify-between items-center mb-6">
-        <div>
-          <h1 className="text-2xl font-bold">Demo Stack</h1>
-          <p className="text-sm text-muted-foreground">
-            Created by {user?.fullName || user?.username}
-          </p>
-        </div>
-        <Button>Save</Button>
-      </div>
+  const removeTrack = (trackId: string) => {
+    // Stop and cleanup audio if playing
+    if (playing === trackId) {
+      const audio = audioRefs.current[trackId];
+      if (audio) {
+        audio.pause();
+        audio.currentTime = 0;
+      }
+      setPlaying(null);
+      cancelAnimationFrame(animationFrames.current[trackId]);
+    }
 
-      {tracks.map((track) => (
-        <div
-          key={track.id}
-          className="flex flex-col gap-4 p-4 bg-white dark:bg-gray-800 rounded-lg shadow-sm"
-        >
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-4">
-              <div className="relative w-14 h-14 bg-gray-100 dark:bg-gray-700 rounded-lg flex items-center justify-center">
+    // Cleanup audio resources
+    if (sourceRefs.current[trackId]) {
+      sourceRefs.current[trackId].disconnect();
+      delete sourceRefs.current[trackId];
+    }
+    if (analyserRefs.current[trackId]) {
+      analyserRefs.current[trackId].disconnect();
+      delete analyserRefs.current[trackId];
+    }
+    if (audioRefs.current[trackId]) {
+      delete audioRefs.current[trackId];
+    }
+
+    // Remove track from state
+    setProgress((prev) => {
+      const newProgress = { ...prev };
+      delete newProgress[trackId];
+      return newProgress;
+    });
+    setDuration((prev) => {
+      const newDuration = { ...prev };
+      delete newDuration[trackId];
+      return newDuration;
+    });
+    setVolumes((prev) => {
+      const newVolumes = { ...prev };
+      delete newVolumes[trackId];
+      return newVolumes;
+    });
+    setMutedTracks((prev) => {
+      const newMuted = { ...prev };
+      delete newMuted[trackId];
+      return newMuted;
+    });
+  };
+
+  return (
+    <div className="flex h-screen">
+      <div className="flex-1 p-6 space-y-4">
+        <div className="flex justify-between items-center mb-6">
+          <div>
+            <h1 className="text-2xl font-bold">Demo Stack</h1>
+            <p className="text-sm text-muted-foreground">
+              Created by {user?.fullName || user?.username}
+            </p>
+          </div>
+          <Button>Save</Button>
+        </div>
+
+        {tracks.map((track) => (
+          <div
+            key={track.id}
+            className="flex flex-col gap-4 p-4 bg-white dark:bg-gray-800 rounded-lg shadow-sm"
+          >
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-4">
+                <div className="relative w-14 h-14 bg-gray-100 dark:bg-gray-700 rounded-lg flex items-center justify-center">
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-10 w-10 rounded-full hover:scale-110 transition-transform z-10"
+                    onClick={() => togglePlay(track.id)}
+                  >
+                    {playing === track.id ? (
+                      <Pause className="h-4 w-4" />
+                    ) : (
+                      <Play className="h-4 w-4" />
+                    )}
+                  </Button>
+                  <canvas
+                    ref={(el) => {
+                      if (el) canvasRefs.current[track.id] = el;
+                    }}
+                    className="absolute inset-0 w-full h-full"
+                  />
+                </div>
+                <div>
+                  <h3 className="font-medium">{track.title}</h3>
+                  <p className="text-sm text-muted-foreground">
+                    {track.instrument}
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-center gap-4">
+                <VolumeControl
+                  volume={volumes[track.id] || 0.8}
+                  onVolumeChange={(value) =>
+                    handleVolumeChange(track.id, value)
+                  }
+                  onMute={() => handleMute(track.id)}
+                  isMuted={mutedTracks[track.id] || false}
+                />
                 <Button
                   variant="ghost"
                   size="icon"
-                  className="h-10 w-10 rounded-full hover:scale-110 transition-transform z-10"
-                  onClick={() => togglePlay(track.id)}
+                  onClick={() => removeTrack(track.id)}
+                  className="text-red-500 hover:text-red-600 hover:bg-red-100 dark:hover:bg-red-900/20"
                 >
-                  {playing === track.id ? (
-                    <Pause className="h-6 w-6" />
-                  ) : (
-                    <Play className="h-6 w-6" />
-                  )}
+                  <Trash2 className="h-4 w-4" />
                 </Button>
-                <canvas
-                  ref={(el) => el && (canvasRefs.current[track.id] = el)}
-                  className="absolute inset-0 w-full h-full rounded-lg"
-                  width={56}
-                  height={56}
-                />
-              </div>
-              <div>
-                <h3 className="font-semibold">
-                  {track.title || track.instrument}
-                </h3>
-                <p className="text-sm text-gray-500 dark:text-gray-400">
-                  {track.prompt}
-                </p>
               </div>
             </div>
-
-            <div className="flex items-center gap-4">
-              <VolumeControl
-                volume={volumes[track.id] || 0.8}
-                onVolumeChange={(value) => handleVolumeChange(track.id, value)}
-                onMute={() => handleMute(track.id)}
-                isMuted={mutedTracks[track.id] || false}
-              />
-              <Button variant="ghost" size="icon">
-                <RotateCw className="h-4 w-4" />
-              </Button>
-            </div>
+            <ProgressBar
+              progress={progress[track.id] || 0}
+              duration={duration[track.id] || 0}
+              onSeek={(value) => handleSeek(track.id, value)}
+            />
           </div>
-
-          <ProgressBar
-            progress={progress[track.id] || 0}
-            duration={duration[track.id] || 0}
-            onSeek={(value) => handleSeek(track.id, value)}
-          />
-        </div>
-      ))}
-
-      {tracks.length === 0 && (
-        <div className="text-center text-muted-foreground py-12">
-          Select an instrument to start creating your stack
-        </div>
-      )}
+        ))}
+      </div>
     </div>
   );
 }
