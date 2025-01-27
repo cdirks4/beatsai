@@ -6,8 +6,8 @@ import { useUser } from "@clerk/nextjs";
 import { Play, Pause, RotateCw, Trash2 } from "lucide-react";
 import { VolumeControl } from "@/components/ui/volume-control";
 import { ProgressBar } from "@/components/ui/progress-bar";
-import InstrumentSidebar from "@/components/InstrumentSidebar";
 import { useStack } from "@/contexts/StackContext";
+import { combineAudioTracks } from "@/lib/api/tracks";
 
 interface Track {
   id: string;
@@ -16,6 +16,7 @@ interface Track {
   audioUrl: string;
   title?: string;
   tags?: string[];
+  blob?: Blob;
 }
 
 const demoTracks: Track[] = [
@@ -47,7 +48,8 @@ const demoTracks: Track[] = [
 
 export default function Stack() {
   const { user } = useUser();
-  const { tracks } = useStack();
+  const { tracks, removeTrack: removeTrackFromContext, addTrack } = useStack();
+  console.log(tracks);
   const [playing, setPlaying] = useState<string | null>(null);
   const [progress, setProgress] = useState<{ [key: string]: number }>({});
   const [duration, setDuration] = useState<{ [key: string]: number }>({});
@@ -310,65 +312,122 @@ export default function Stack() {
     });
   };
 
-  const removeTrack = (trackId: string) => {
-    const track = tracks.find((t) => t.id === trackId);
-    if (track?.audioUrl.startsWith("blob:")) {
-      URL.revokeObjectURL(track.audioUrl);
-    }
+  const removeTrack = async (trackId: string) => {
+    try {
+      // Stop playing if this track is playing
+      if (playing === trackId) {
+        const audio = audioRefs.current[trackId];
+        if (audio) {
+          audio.pause();
+          audio.currentTime = 0;
+        }
+        setPlaying(null);
+      }
 
-    // Stop and cleanup audio if playing
-    if (playing === trackId) {
+      // Clean up audio nodes
+      if (sourceRefs.current[trackId]) {
+        try {
+          sourceRefs.current[trackId].disconnect();
+        } catch (e) {
+          // Ignore disconnect errors
+        }
+        delete sourceRefs.current[trackId];
+      }
+      if (analyserRefs.current[trackId]) {
+        try {
+          analyserRefs.current[trackId].disconnect();
+        } catch (e) {
+          // Ignore disconnect errors
+        }
+        delete analyserRefs.current[trackId];
+      }
+
+      // Clean up audio element
       const audio = audioRefs.current[trackId];
       if (audio) {
         audio.pause();
-        audio.currentTime = 0;
+        audio.removeEventListener("loadedmetadata", () => {});
+        audio.removeEventListener("ended", () => handleAudioEnded(trackId));
+        audio.removeEventListener("timeupdate", () => {});
       }
-      setPlaying(null);
-      cancelAnimationFrame(animationFrames.current[trackId]);
-    }
-
-    // Cleanup audio resources
-    if (sourceRefs.current[trackId]) {
-      try {
-        sourceRefs.current[trackId].disconnect();
-      } catch (e) {
-        // Ignore disconnect errors
-      }
-      delete sourceRefs.current[trackId];
-    }
-    if (analyserRefs.current[trackId]) {
-      try {
-        analyserRefs.current[trackId].disconnect();
-      } catch (e) {
-        // Ignore disconnect errors
-      }
-      delete analyserRefs.current[trackId];
-    }
-    if (audioRefs.current[trackId]) {
       delete audioRefs.current[trackId];
-    }
 
-    // Remove track from state
-    setProgress((prev) => {
-      const newProgress = { ...prev };
-      delete newProgress[trackId];
-      return newProgress;
-    });
-    setDuration((prev) => {
-      const newDuration = { ...prev };
-      delete newDuration[trackId];
-      return newDuration;
-    });
-    setVolumes((prev) => {
-      const newVolumes = { ...prev };
-      delete newVolumes[trackId];
-      return newVolumes;
-    });
-    setMutedTracks((prev) => {
-      const newMuted = { ...prev };
-      delete newMuted[trackId];
-      return newMuted;
-    });
+      // Clean up blob URL if it exists
+      const track = tracks.find((t) => t.id === trackId);
+      if (track?.audioUrl.startsWith("blob:")) {
+        URL.revokeObjectURL(track.audioUrl);
+      }
+
+      // Remove from context
+      removeTrackFromContext(trackId);
+    } catch (error) {
+      console.error("Error removing track:", error);
+    }
+  };
+
+  const handleCombine = async () => {
+    try {
+      // Pause any playing track
+      if (playing) {
+        const audio = audioRefs.current[playing];
+        if (audio) {
+          audio.pause();
+          audio.currentTime = 0;
+        }
+        setPlaying(null);
+      }
+
+      // Get audio data from each track
+      const trackData = tracks.map((track) => {
+        return {
+          id: track.id,
+          instrument: track.instrument,
+          audioUrl: track.audioUrl,
+          volume: volumes[track.id] || 0.8,
+          isMuted: mutedTracks[track.id] || false,
+          // Get the actual audio buffer from the audio element
+          audioBuffer: audioRefs.current[track.id]?.src || track.audioUrl,
+        };
+      });
+
+      // Send to backend for combining
+      const result = await combineAudioTracks(trackData);
+
+      // Create a new track object for the combined track
+      const combinedTrack = {
+        id: `combined-${Date.now()}`,
+        instrument: "Combined",
+        prompt: "Combined track from multiple instruments",
+        audioUrl: result.audioUrl,
+        title: `Combined Track ${new Date().toLocaleTimeString()}`,
+        tags: ["combined"],
+        blob: result.blob,
+      };
+
+      // Add the combined track to the stack
+      await addTrack(combinedTrack);
+
+      // Set up audio handling for the new track
+      const audio = new Audio();
+      audio.src = result.audioUrl;
+      audio.volume = 0.8;
+      audioRefs.current[combinedTrack.id] = audio;
+      setVolumes((prev) => ({ ...prev, [combinedTrack.id]: 0.8 }));
+      setMutedTracks((prev) => ({ ...prev, [combinedTrack.id]: false }));
+
+      // Setup audio node for the combined track
+      await setupAudioNode(combinedTrack.id);
+
+      // Optional: Download the combined track
+      const a = document.createElement("a");
+      a.href = result.audioUrl;
+      a.download = `combined-track-${Date.now()}.wav`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+    } catch (error) {
+      console.error("Error combining tracks:", error);
+    }
   };
 
   return (
@@ -381,7 +440,9 @@ export default function Stack() {
               Created by {user?.fullName || user?.username}
             </p>
           </div>
-          <Button>Save</Button>
+          <div className="flex gap-2">
+            <Button onClick={handleCombine}>Combine Tracks</Button>
+          </div>
         </div>
 
         {tracks.map((track) => (
